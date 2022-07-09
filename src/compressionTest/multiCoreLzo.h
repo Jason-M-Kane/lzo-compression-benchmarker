@@ -50,6 +50,7 @@ typedef struct
 	unsigned int in_len;
 	tmpOutBufStruct* tmpOutBuffer;
 	unsigned short* ptrDictionary;
+	LARGE_INTEGER blockStartCount, blockEndCount, blockFullCount;
 }threadCommsStruct;
 
 
@@ -79,7 +80,9 @@ int lzo1x_1_15_multiCore_control(const unsigned char* in, unsigned int  in_len,
 								 unsigned int numTmpBuffers, 
 								 HANDLE* hSemTaskCmplete,
 								 threadCommsStruct* threadComms,
-								 reassembleType* reassembleInfo);
+								 reassembleType* reassembleInfo,
+								 unsigned int* numInputBlocksProcessed,
+								 LARGE_INTEGER* blockFullCount);
 
 
 #endif

@@ -488,7 +488,9 @@ int lzo1x_1_15_Combo_control(const unsigned char* in, unsigned int  in_len,
 								 unsigned int numTmpBuffers, 
 								 HANDLE* hSemTaskCmplete,
 								 threadCommsStruct* threadComms,
-								 reassembleType* reassembleInfo)
+								 reassembleType* reassembleInfo,
+								 unsigned int* numInputBlocksProcessed,
+								 LARGE_INTEGER* blockFullCount)
 {
 	unsigned char* ptrInput, *ptrOutput;
 	unsigned int numBlocks, nextBlock;
@@ -520,6 +522,7 @@ int lzo1x_1_15_Combo_control(const unsigned char* in, unsigned int  in_len,
 	numBlocks = in_len / blockSize;
 	if( (numBlocks*blockSize) < in_len )
 		numBlocks++;
+	*numInputBlocksProcessed = numBlocks;
 
 	/********************************/
 	/* Initialize Reassembly Thread */
@@ -897,6 +900,13 @@ int lzo1x_1_15_Combo_control(const unsigned char* in, unsigned int  in_len,
 		}
 	}
 
+	/* Get total time spent compressing just the input blocks of data */
+	for(x = 0; x < numInit; x++)
+	{
+		(*blockFullCount).QuadPart += threadComms[x].blockFullCount.QuadPart;
+		threadComms[x].blockFullCount.QuadPart = 0;
+	}
+
 	/* Cleanup */
 	free(freeTbufArray);
 	free(threadRescheduleList);
@@ -1107,6 +1117,7 @@ static DWORD WINAPI reassembleDataThread(LPVOID lpParam)
 static DWORD WINAPI multiCore_compress_thread(LPVOID lpParam)
 {
 	threadCommsStruct* threadSharedData = (threadCommsStruct*)lpParam;
+	threadSharedData->blockFullCount.QuadPart = 0;
 
 	/* Loop Waiting to Receive Compression or Terminate Commands */
 	/* From the Control Thread                                   */
@@ -1121,6 +1132,7 @@ static DWORD WINAPI multiCore_compress_thread(LPVOID lpParam)
 		/* Determine Action to Perform and Perform It */
 		if(threadSharedData->status == STATUS_COMPRESS)
 		{
+			QueryPerformanceCounter(&threadSharedData->blockStartCount);
 			if( lzo1x_1_15_compress_multiThread(threadSharedData->in, 
 												threadSharedData->in_len,
 												threadSharedData->tmpOutBuffer->buffer,
@@ -1129,6 +1141,17 @@ static DWORD WINAPI multiCore_compress_thread(LPVOID lpParam)
 			{
 				printf("Error occurred during compression in thread %u\n", threadSharedData->threadId);
 			}
+			QueryPerformanceCounter(&threadSharedData->blockEndCount);
+			if(threadSharedData->blockEndCount.QuadPart > threadSharedData->blockStartCount.QuadPart)
+			{
+				threadSharedData->blockFullCount.QuadPart += threadSharedData->blockEndCount.QuadPart - threadSharedData->blockStartCount.QuadPart;
+			}
+			else
+			{
+				//Account for roll-over situation if it occurs
+				threadSharedData->blockFullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - threadSharedData->blockEndCount.QuadPart) + threadSharedData->blockStartCount.QuadPart + 1;
+			}
+
 			threadSharedData->status = STATUS_IDLE;
 			ReleaseSemaphore(*(threadSharedData->hSemTaskCmplete),1,NULL);
 		}

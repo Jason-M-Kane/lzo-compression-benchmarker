@@ -11,7 +11,14 @@
 #include "combinationLzo.h"
 
 #define DEFAULT_BLOCK_SIZE		262144	/* 256kB */
-#define OUTPUT_FILE_NAME        "C:\\Compression_Test\\CompressionTestOutput.txt"
+#define OUTPUT_FILE_NAME        "C:\\Compression_Test\\MemCompressionTestOutput.txt"
+#define OUTPUT_FILE_NAME_2      "C:\\Compression_Test\\MemCompressionTestOutputSimple.txt"
+#define OUTPUT_FILE_NAME_A      "C:\\Compression_Test\\MemCompressionTestOutputCompressTimeOnly.txt"
+#define OUTPUT_FILE_NAME_B      "C:\\Compression_Test\\MemCompressionTestOutputAvgCompressTimePerBlkOnly.txt"
+#define OUTPUT_FILE_NAME_C      "C:\\Compression_Test\\MemCompressionTestOutputAvgThruputOnly.txt"
+#define OUTPUT_FILE_NAME_D      "C:\\Compression_Test\\MemCompressionTestOutputCompressionRatioOnly.txt"
+
+
 
 /* Compression Modes */
 #define OLD_LZO					0   /* Baseline LZO 1x-1-15 Test */
@@ -22,43 +29,10 @@
 #define COMBO					5   /* 3x Combined Test */
 
 /* Size of Memory Buffer */
-#define BUFFER_SIZE	(256*1024*1024)		/* NOTE: MUST BE A MULTIPLE OF BLOCK SIZE IN ORDER FOR PROGRAM TO WORK PROPERLY!!! */
-											/* Can get around this with more coding, but for benchmarking purposes, not necessary or useful */
-#define BUFFER_SIZE_SMALL (32*1024*1024)
-#define NUM_READS (BUFFER_SIZE/BUFFER_SIZE_SMALL)
+#define BUFFER_SIZE	(512*1024*1024)		/* NOTE: MUST BE A MULTIPLE OF BLOCK SIZE IN ORDER FOR PROGRAM TO WORK PROPERLY!!! */
+										/* Can get around this with more coding, but for benchmarking purposes, not necessary or useful */
 
-
-/* Function to fill a buffer of size BUFFER_SIZE bytes in increments of BUFFER_SIZE_SMALL */
-int fillBuffer(HANDLE infile, unsigned char* inputBuffer, DWORD* numRead)
-{
-	int x;
-	unsigned int totalRead = 0;
-	unsigned char* pInput = inputBuffer;
-
-	for(x=0;x<NUM_READS;x++)
-	{
-		/* Fill Buffer For the First Time */
-		if( ReadFile(infile,pInput,BUFFER_SIZE_SMALL,numRead,NULL) == 0)
-		{
-			printf("ReadFile failure %u.\n",GetLastError());
-			_aligned_free(inputBuffer);
-			CloseHandle(infile);
-			return -1;
-		}
-		totalRead+=*numRead;
-		pInput+=*numRead;
-
-		if(*numRead < BUFFER_SIZE_SMALL)
-		{
-			/* EOF */
-			return 0;
-		}
-	}
-
-	return 0;
-}
-
-
+unsigned int G_RD_BUFFER_SIZE;
 
 
 int main(int argc, char** argv)
@@ -88,12 +62,17 @@ int main(int argc, char** argv)
 	char* dictMem = NULL;
 	unsigned char* outputBuffer = NULL;
 	float time = 0.0;
+	float blockCompressTime = 0.0;
 	int compressionType;
-	LARGE_INTEGER startCount,endCount,fullCount,freq,fileSize,amountCompressed,dist;
+
+	LARGE_INTEGER blockStartCount,blockEndCount,blockFullCount, numberOfInputBlocks;
+
+	LARGE_INTEGER startCount,endCount,fullCount,freq,fileSize,amountCompressed,dist,totalOutlen;
 	QueryPerformanceFrequency( &freq );
 	dist.QuadPart = 0;
 
 	compressionType = OLD_LZO;
+
 
 	/***********************************************/
 	/* Parse command line parameters if they exist */
@@ -156,6 +135,9 @@ int main(int argc, char** argv)
 		return -1;
 	}
 
+	/* Determine Read buffersize, needs to be a multiple of block size */
+	G_RD_BUFFER_SIZE = (BUFFER_SIZE/compressionBlockSizeBytes) * (compressionBlockSizeBytes);
+
 
 	/* Open the file for reading */
 	infile = CreateFile((LPCSTR)inputfname,GENERIC_READ,FILE_SHARE_READ,
@@ -173,6 +155,11 @@ int main(int argc, char** argv)
 		CloseHandle(infile);
 		return -1;
 	}
+
+	/* Force Max Filesize to 512MBytes */
+	if(fileSize.QuadPart > G_RD_BUFFER_SIZE)
+		fileSize.QuadPart = G_RD_BUFFER_SIZE;
+
 	amountCompressed.QuadPart = fileSize.QuadPart; /* Will be compressing the entire file */
 
 	/* Allocate memory buffers */
@@ -199,7 +186,7 @@ int main(int argc, char** argv)
 	}
 
 	
-	printf("Beginning Compression of %s, Size = %I64d bytes, Iter=%d.\n",inputfname,fileSize.QuadPart,numIterations);
+	printf("(Memory Version) Beginning Compression of %s, Size = %I64d bytes, Iter=%d.\n",inputfname,fileSize.QuadPart,numIterations);
 
 	if((compressionType == MULTICORE) || (compressionType == COMBO))
 	{
@@ -234,24 +221,24 @@ int main(int argc, char** argv)
 		}
 	}
 
-
-	for(aa=0;aa<numIterations;aa++)
+	/* Fill the Input Buffer For Compresssion */
+	if( ReadFile(infile,inputBuffer,G_RD_BUFFER_SIZE,&numRead,NULL) == 0)
 	{
+		printf("ReadFile failure %u.\n",GetLastError());
+		_aligned_free(inputBuffer);
+		CloseHandle(infile);
+		return -1;
+	}
+
+
+	numberOfInputBlocks.QuadPart = 0;
+
+	for(aa=0;aa</*numIterations*/100;aa++)
+	{
+		blockFullCount.QuadPart = 0;
 		fullCount.QuadPart = 0;
 		pInputBuffer = inputBuffer;
 		fileSize.QuadPart = amountCompressed.QuadPart;
-
-		/* Rewind File to Beginning */
-		SetFilePointerEx(infile,dist,NULL,FILE_BEGIN);
-
-		/* Fill Buffer For the First Time */
-		if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-		{
-			_aligned_free(inputBuffer);
-			_aligned_free(outputBuffer);
-			CloseHandle(infile);
-			return -1;
-		}
 		bufferedBytes = numRead;
 
 
@@ -260,7 +247,7 @@ int main(int argc, char** argv)
 		/**********************************/
 		if(compressionType == OLD_LZO)
 		{
-			unsigned int totalOutlen = 0;
+			totalOutlen.QuadPart = 0;
 			
 			/* Set the input block size */
 			blockSize = compressionBlockSizeBytes;
@@ -271,50 +258,29 @@ int main(int argc, char** argv)
 			QueryPerformanceCounter(&startCount);
 			while(fileSize.QuadPart > 0)
 			{
+				QueryPerformanceCounter(&blockStartCount);
 				lzo1x_1_15_compress (pInputBuffer, blockSize, 
 									outputBuffer, &outLength, dictMem);
-				totalOutlen+=outLength;						//Update Length of Output Data
+				QueryPerformanceCounter(&blockEndCount);
+				if(blockEndCount.QuadPart > blockStartCount.QuadPart)
+				{
+					blockFullCount.QuadPart += blockEndCount.QuadPart - blockStartCount.QuadPart;
+				}
+				else
+				{
+					//Account for roll-over situation if it occurs
+					blockFullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - blockEndCount.QuadPart) + blockStartCount.QuadPart + 1;
+				}
+				
+				numberOfInputBlocks.QuadPart++;
+				totalOutlen.QuadPart+=outLength;			//Update Length of Output Data
 				pInputBuffer+=blockSize;					//Advance Input Pointer
 
 				fileSize.QuadPart -= blockSize;				//Update Remaining Filesize
 				bufferedBytes -= blockSize;					//Update Remaining Bytes in the current memory read buffer
 				if(fileSize.QuadPart < blockSize)			//Update Block Size when only a remainder size exists
 					blockSize = (unsigned int)fileSize.QuadPart;
-
-				//Determine when to read more input data from the input file
-				//Do not count time spent reading from the input file against the throughput
-				if((fileSize.QuadPart > 0) && (bufferedBytes <= 0))
-				{
-					//Stop Timer and update number of ticks currently expired
-					QueryPerformanceCounter(&endCount);
-					if(endCount.QuadPart > startCount.QuadPart)
-					{
-						fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
-					}
-					else
-					{
-						//Account for roll-over situation if it occurs
-						fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
-					}
-
-					if(bufferedBytes != 0)
-						printf("Warning, Buffered Bytes != 0, unexpected behavior.\n");
-
-					if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-					{
-						_aligned_free(inputBuffer);
-						_aligned_free(outputBuffer);
-						CloseHandle(infile);
-						return -1;
-					}
-					pInputBuffer = inputBuffer;
-					bufferedBytes = numRead;
-
-					//Restart Timer
-					QueryPerformanceCounter(&startCount);
-				}
 			}
-			outLength = totalOutlen;
 		}
 
 
@@ -323,7 +289,7 @@ int main(int argc, char** argv)
 		/*************************************************************************************/
 		else if(compressionType == FAST_MEMCPY)
 		{
-			unsigned int totalOutlen = 0;
+			totalOutlen.QuadPart = 0;
 			
 			/* Set the input block size */
 			blockSize = compressionBlockSizeBytes;
@@ -334,50 +300,29 @@ int main(int argc, char** argv)
 			QueryPerformanceCounter(&startCount);
 			while(fileSize.QuadPart > 0)
 			{
+				QueryPerformanceCounter(&blockStartCount);
 				lzo1x_1_15_FASTMEMCPYcompress (pInputBuffer, blockSize, 
 									outputBuffer, &outLength, dictMem);
-				totalOutlen+=outLength;						//Update Length of Output Data
+				QueryPerformanceCounter(&blockEndCount);
+				if(blockEndCount.QuadPart > blockStartCount.QuadPart)
+				{
+					blockFullCount.QuadPart += blockEndCount.QuadPart - blockStartCount.QuadPart;
+				}
+				else
+				{
+					//Account for roll-over situation if it occurs
+					blockFullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - blockEndCount.QuadPart) + blockStartCount.QuadPart + 1;
+				}
+
+				numberOfInputBlocks.QuadPart++;
+				totalOutlen.QuadPart+=outLength;			//Update Length of Output Data
 				pInputBuffer+=blockSize;					//Advance Input Pointer
 
 				fileSize.QuadPart -= blockSize;				//Update Remaining Filesize
 				bufferedBytes -= blockSize;					//Update Remaining Bytes in the current memory read buffer
 				if(fileSize.QuadPart < blockSize)			//Update Block Size when only a remainder size exists
 					blockSize = (unsigned int)fileSize.QuadPart;
-
-				//Determine when to read more input data from the input file
-				//Do not count time spent reading from the input file against the throughput
-				if((fileSize.QuadPart > 0) && (bufferedBytes <= 0))
-				{
-					//Stop Timer and update number of ticks currently expired
-					QueryPerformanceCounter(&endCount);
-					if(endCount.QuadPart > startCount.QuadPart)
-					{
-						fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
-					}
-					else
-					{
-						//Account for roll-over situation if it occurs
-						fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
-					}
-
-					if(bufferedBytes != 0)
-						printf("Warning, Buffered Bytes != 0, unexpected behavior.\n");
-
-					if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-					{
-						_aligned_free(inputBuffer);
-						_aligned_free(outputBuffer);
-						CloseHandle(infile);
-						return -1;
-					}
-					pInputBuffer = inputBuffer;
-					bufferedBytes = numRead;
-
-					//Restart Timer
-					QueryPerformanceCounter(&startCount);
-				}
 			}
-			outLength = totalOutlen;
 		}
 
 
@@ -386,7 +331,7 @@ int main(int argc, char** argv)
 		/*********************************************************/
 		else if(compressionType == ALIGNED_32)
 		{
-			unsigned int totalOutlen = 0;
+			totalOutlen.QuadPart = 0;
 			
 			/* Set the input block size */
 			blockSize = compressionBlockSizeBytes;
@@ -397,50 +342,29 @@ int main(int argc, char** argv)
 			QueryPerformanceCounter(&startCount);
 			while(fileSize.QuadPart > 0)
 			{
+				QueryPerformanceCounter(&blockStartCount);
 				lzo1x_1_15_compress_32_ALIGNED (pInputBuffer, blockSize, 
 									outputBuffer, &outLength, dictMem);
-				totalOutlen+=outLength;						//Update Length of Output Data
+				QueryPerformanceCounter(&blockEndCount);
+				if(blockEndCount.QuadPart > blockStartCount.QuadPart)
+				{
+					blockFullCount.QuadPart += blockEndCount.QuadPart - blockStartCount.QuadPart;
+				}
+				else
+				{
+					//Account for roll-over situation if it occurs
+					blockFullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - blockEndCount.QuadPart) + blockStartCount.QuadPart + 1;
+				}
+
+				numberOfInputBlocks.QuadPart++;
+				totalOutlen.QuadPart+=outLength;			//Update Length of Output Data
 				pInputBuffer+=blockSize;					//Advance Input Pointer
 
 				fileSize.QuadPart -= blockSize;				//Update Remaining Filesize
 				bufferedBytes -= blockSize;					//Update Remaining Bytes in the current memory read buffer
 				if(fileSize.QuadPart < blockSize)			//Update Block Size when only a remainder size exists
 					blockSize = (unsigned int)fileSize.QuadPart;
-
-				//Determine when to read more input data from the input file
-				//Do not count time spent reading from the input file against the throughput
-				if((fileSize.QuadPart > 0) && (bufferedBytes <= 0))
-				{
-					//Stop Timer and update number of ticks currently expired
-					QueryPerformanceCounter(&endCount);
-					if(endCount.QuadPart > startCount.QuadPart)
-					{
-						fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
-					}
-					else
-					{
-						//Account for roll-over situation if it occurs
-						fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
-					}
-
-					if(bufferedBytes != 0)
-						printf("Warning, Buffered Bytes != 0, unexpected behavior.\n");
-
-					if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-					{
-						_aligned_free(inputBuffer);
-						_aligned_free(outputBuffer);
-						CloseHandle(infile);
-						return -1;
-					}
-					pInputBuffer = inputBuffer;
-					bufferedBytes = numRead;
-
-					//Restart Timer
-					QueryPerformanceCounter(&startCount);
-				}
 			}
-			outLength = totalOutlen;
 		}
 
 
@@ -449,7 +373,7 @@ int main(int argc, char** argv)
 		/*******************************************************************************************/
 		else if(compressionType == NOT_ALIGNED_32)
 		{
-			unsigned int totalOutlen = 0;
+			totalOutlen.QuadPart = 0;
 			
 			/* Set the input block size */
 			blockSize = compressionBlockSizeBytes;
@@ -460,50 +384,29 @@ int main(int argc, char** argv)
 			QueryPerformanceCounter(&startCount);
 			while(fileSize.QuadPart > 0)
 			{
+				QueryPerformanceCounter(&blockStartCount);
 				lzo1x_1_15_compress_32_NOT_ALIGNED (pInputBuffer, blockSize, 
 									outputBuffer, &outLength, dictMem);
-				totalOutlen+=outLength;						//Update Length of Output Data
+				QueryPerformanceCounter(&blockEndCount);
+				if(blockEndCount.QuadPart > blockStartCount.QuadPart)
+				{
+					blockFullCount.QuadPart += blockEndCount.QuadPart - blockStartCount.QuadPart;
+				}
+				else
+				{
+					//Account for roll-over situation if it occurs
+					blockFullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - blockEndCount.QuadPart) + blockStartCount.QuadPart + 1;
+				}
+
+				numberOfInputBlocks.QuadPart++;
+				totalOutlen.QuadPart+=outLength;			//Update Length of Output Data
 				pInputBuffer+=blockSize;					//Advance Input Pointer
 
 				fileSize.QuadPart -= blockSize;				//Update Remaining Filesize
 				bufferedBytes -= blockSize;					//Update Remaining Bytes in the current memory read buffer
 				if(fileSize.QuadPart < blockSize)			//Update Block Size when only a remainder size exists
 					blockSize = (unsigned int)fileSize.QuadPart;
-
-				//Determine when to read more input data from the input file
-				//Do not count time spent reading from the input file against the throughput
-				if((fileSize.QuadPart > 0) && (bufferedBytes <= 0))
-				{
-					//Stop Timer and update number of ticks currently expired
-					QueryPerformanceCounter(&endCount);
-					if(endCount.QuadPart > startCount.QuadPart)
-					{
-						fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
-					}
-					else
-					{
-						//Account for roll-over situation if it occurs
-						fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
-					}
-
-					if(bufferedBytes != 0)
-						printf("Warning, Buffered Bytes != 0, unexpected behavior.\n");
-
-					if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-					{
-						_aligned_free(inputBuffer);
-						_aligned_free(outputBuffer);
-						CloseHandle(infile);
-						return -1;
-					}
-					pInputBuffer = inputBuffer;
-					bufferedBytes = numRead;
-
-					//Restart Timer
-					QueryPerformanceCounter(&startCount);
-				}
 			}
-			outLength = totalOutlen;
 		}
 
 
@@ -512,7 +415,8 @@ int main(int argc, char** argv)
 		/**************************************************/
 		else if(compressionType == MULTICORE)
 		{
-			unsigned int totalOutlen = 0;
+			unsigned int numInputBlocksProcessed = 0;
+			totalOutlen.QuadPart = 0;
 			
 			/* Set the input block size */
 			blockSize = compressionBlockSizeBytes;
@@ -534,42 +438,17 @@ int main(int argc, char** argv)
 					instTmpBuffer,
 					numTmpOutputBuffers,
 					instTaskCmpleteHandle,
-					instThreadComms,reassembleInst) != 0)
+					instThreadComms,reassembleInst,
+					&numInputBlocksProcessed,
+					&blockFullCount) != 0)
 				{
 					printf("Multicore LZO Compression Failed.\n");
 				}
 
-				totalOutlen+=outLength;						//Update Length of Output Data
+				numberOfInputBlocks.QuadPart += numInputBlocksProcessed;
+				totalOutlen.QuadPart+=outLength;			//Update Length of Output Data
 				fileSize.QuadPart -= numRead;				//Update Remaining Filesize
-
-				//Determine when to read more input data from the input file
-				//Do not count time spent reading from the input file against the throughput
-				if(fileSize.QuadPart > 0)
-				{
-					//Stop Timer and update number of ticks currently expired
-					QueryPerformanceCounter(&endCount);
-					if(endCount.QuadPart > startCount.QuadPart)
-					{
-						fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
-					}
-					else
-					{
-						//Account for roll-over situation if it occurs
-						fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
-					}
-					if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-					{
-						_aligned_free(inputBuffer);
-						_aligned_free(outputBuffer);
-						CloseHandle(infile);
-						return -1;
-					}
-
-					//Restart Timer
-					QueryPerformanceCounter(&startCount);
-				}
 			}
-			outLength = totalOutlen;
 		}
 
 
@@ -578,7 +457,8 @@ int main(int argc, char** argv)
 		/*************************************************************************************************************/
 		else if(compressionType == COMBO)
 		{
-			unsigned int totalOutlen = 0;
+			unsigned int numInputBlocksProcessed = 0;
+			totalOutlen.QuadPart = 0;
 			
 			/* Set the input block size */
 			blockSize = compressionBlockSizeBytes;
@@ -600,42 +480,17 @@ int main(int argc, char** argv)
 					instTmpBuffer,
 					numTmpOutputBuffers,
 					instTaskCmpleteHandle,
-					instThreadComms,reassembleInst) != 0)
+					instThreadComms,reassembleInst,
+					&numInputBlocksProcessed,
+					&blockFullCount) != 0)
 				{
 					printf("Combo LZO Compression Failed.\n");
 				}
 			
-				totalOutlen+=outLength;						//Update Length of Output Data
+				numberOfInputBlocks.QuadPart += numInputBlocksProcessed;
+				totalOutlen.QuadPart+=outLength;			//Update Length of Output Data
 				fileSize.QuadPart -= numRead;				//Update Remaining Filesize
-
-				//Determine when to read more input data from the input file
-				//Do not count time spent reading from the input file against the throughput
-				if(fileSize.QuadPart > 0)
-				{
-					//Stop Timer and update number of ticks currently expired
-					QueryPerformanceCounter(&endCount);
-					if(endCount.QuadPart > startCount.QuadPart)
-					{
-						fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
-					}
-					else
-					{
-						//Account for roll-over situation if it occurs
-						fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
-					}
-					if( fillBuffer(infile, inputBuffer, &numRead) < 0 )
-					{
-						_aligned_free(inputBuffer);
-						_aligned_free(outputBuffer);
-						CloseHandle(infile);
-						return -1;
-					}
-
-					//Restart Timer
-					QueryPerformanceCounter(&startCount);
-				}
 			}
-			outLength = totalOutlen;
 		}
 
 
@@ -647,10 +502,24 @@ int main(int argc, char** argv)
 			return -1;
 		}
 		
-		/* Determine Time Spent for Compression */
+
+
+
+		/* Determine Total Time Spent for Compression, overall and overall on a block basis */
 		QueryPerformanceCounter(&endCount);
-		fullCount.QuadPart = endCount.QuadPart-startCount.QuadPart+fullCount.QuadPart;
+		if(endCount.QuadPart > startCount.QuadPart)
+		{
+			fullCount.QuadPart += endCount.QuadPart - startCount.QuadPart;
+		}
+		else
+		{
+			//Account for roll-over situation if it occurs
+			fullCount.QuadPart += (0xFFFFFFFFFFFFFFFF - endCount.QuadPart) + startCount.QuadPart + 1;
+		}
 		time += (float)((double)(fullCount.QuadPart) / (double)(freq.QuadPart));
+
+		/* Average Compression Time Per Input Block */
+		blockCompressTime+=(float)((double)(blockFullCount.QuadPart) / (double)(freq.QuadPart));
 	}
 
 	/* MultiCore Cleanup */
@@ -678,13 +547,17 @@ int main(int argc, char** argv)
 	}
 
 
+	blockCompressTime /= (float)numberOfInputBlocks.QuadPart;
+
+//	printf("\nNum Input Blocks: %u\n",numberOfInputBlocks.QuadPart);
+
 	/* Print Information to CRT */
-	printf("\n\nCompression took %f seconds.\n",time);
-	printf("Output Size is %d bytes (%f%% compression; %f bits/byte).\n",outLength,((float)outLength/(float)amountCompressed.QuadPart)*100.0, 
-		((float)outLength/(float)amountCompressed.QuadPart)*8.0);
+	printf("\n\nCompression took an average of %f seconds (%.9f msec per block).\n",time / (float)aa,blockCompressTime*1000.0);
+	printf("Output Size is %I64d bytes (%f%% compression ratio; %f bits/byte).\n",totalOutlen.QuadPart,((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*100.0, 
+		((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*8.0);
 	printf("Throughput: %f MBytes/sec\n\n", (((float)amountCompressed.QuadPart*(float)aa)/time) / (float)(1024.0*1024.0) );
 	fflush(stdin);
-//	getchar();
+
 
 	/* Print Information out to a File (Append so Batch Jobs are fine) */
 	outfile = fopen(OUTPUT_FILE_NAME,"a");
@@ -702,13 +575,84 @@ int main(int argc, char** argv)
 		fprintf(outfile, "\nInput Parameters: \n");
 		for(x = 0; x < argc; x++)
 			fprintf(outfile,"\t%d: %s\n",x+1,argv[x]);
-		fprintf(outfile,"\n\nCompression took %f seconds.\n",time);
-		fprintf(outfile,"Output Size is %d bytes (%f%% compression; %f bits/byte).\n",outLength,((float)outLength/(float)amountCompressed.QuadPart)*100.0, 
-			((float)outLength/(float)amountCompressed.QuadPart)*8.0);
+		fprintf(outfile,"\n\nCompression took an average of %f seconds (%.9f msec per block).\n",time / (float)aa,blockCompressTime*1000.0);
+		fprintf(outfile,"Output Size is %I64d bytes (%f%% compression ratio; %f bits/byte).\n",totalOutlen.QuadPart,((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*100.0, 
+			((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*8.0);
 		fprintf(outfile,"Throughput: %f MBytes/sec\n\n", (((float)amountCompressed.QuadPart*(float)aa)/time) / (float)(1024.0*1024.0) );
 		fprintf(outfile, "\n============== END TEST =================\n\n");
 		fclose(outfile);
 	}
+
+
+	/* Print Information out to a File (Append so Batch Jobs are fine) */
+	outfile = fopen(OUTPUT_FILE_NAME_2,"a");
+	if(outfile == NULL)
+	{
+		printf("Error opening output file for writing.\n");
+	}
+	else
+	{
+		int x;
+
+		fprintf(outfile, "\nInput Parameters: \n");
+		for(x = 0; x < argc; x++)
+			fprintf(outfile,"\t%d: %s",x+1,argv[x]);
+		fprintf(outfile,"\nAvg Compression Time %f Block Compress Time %.9f ms Throughput: %f MBytes/sec (%f%% compression; %f bits/byte).\n", (time / (float)aa),blockCompressTime*1000.0,(((float)amountCompressed.QuadPart*(float)aa)/time) / (float)(1024.0*1024.0),((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*100.0, 
+			((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*8.0);
+		fclose(outfile);
+	}
+
+	/* Print Avg Compression Times Only */
+	outfile = fopen(OUTPUT_FILE_NAME_A,"a");
+	if(outfile == NULL)
+	{
+		printf("Error opening output file for writing.\n");
+	}
+	else
+	{
+		fprintf(outfile,"%f\n", (time / (float)aa));
+		fclose(outfile);
+	}
+
+
+	/* Print Avg Compression Time per block only */
+	outfile = fopen(OUTPUT_FILE_NAME_B,"a");
+	if(outfile == NULL)
+	{
+		printf("Error opening output file for writing.\n");
+	}
+	else
+	{
+		fprintf(outfile,"%f\n",blockCompressTime*1000.0);
+		fclose(outfile);
+	}
+
+
+	/* Print Avg Throughput Only */
+	outfile = fopen(OUTPUT_FILE_NAME_C,"a");
+	if(outfile == NULL)
+	{
+		printf("Error opening output file for writing.\n");
+	}
+	else
+	{
+		fprintf(outfile,"%f\n", (((float)amountCompressed.QuadPart*(float)aa)/time) / (float)(1024.0*1024.0));
+		fclose(outfile);
+	}
+
+
+	/* Print Compression Ratio Only */
+	outfile = fopen(OUTPUT_FILE_NAME_D,"a");
+	if(outfile == NULL)
+	{
+		printf("Error opening output file for writing.\n");
+	}
+	else
+	{
+		fprintf(outfile,"%f\n", ((float)totalOutlen.QuadPart/(float)amountCompressed.QuadPart)*100.0);
+		fclose(outfile);
+	}
+
 
 	/* Cleanup */
 	CloseHandle(infile);
@@ -718,7 +662,3 @@ int main(int argc, char** argv)
 
 	return 0;
 }
-
-
-
-

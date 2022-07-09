@@ -26,7 +26,9 @@ int lzo1x_1_15_Combo_control(const unsigned char* in, unsigned int  in_len,
 								 unsigned int numTmpBuffers, 
 								 HANDLE* hSemTaskCmplete,
 								 threadCommsStruct* threadComms,
-								 reassembleType* reassembleInfo);
+								 reassembleType* reassembleInfo,
+								 unsigned int* numInputBlocksProcessed,
+								 LARGE_INTEGER* blockFullCount);
 
 
 #endif
