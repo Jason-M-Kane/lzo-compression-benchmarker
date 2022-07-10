@@ -4,7 +4,7 @@ https://doi.org/10.1109/SBAC-PAD.2012.29
 
 
 
-**Usage:  compressionTest.exe filename compressionType numIterations [blockSize]  
+**Usage:  compressionTest.exe filename compressionType numIterations [blockSize]**  
 
 Where:  
 &nbsp;&nbsp;&nbsp;&nbsp;*filename* is the full path to the file to be compressed  
