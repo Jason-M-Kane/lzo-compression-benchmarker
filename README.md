@@ -7,11 +7,11 @@ https://doi.org/10.1109/SBAC-PAD.2012.29
 Usage:  compressionTest.exe filename compressionType numIterations blockSize  
 
 Where:  
-    filename is the full path to the file to be compressed  
-    compressionType is an integer in the range 0 to 5, with  
-        0 = Baseline LZO 1x-1-15 compression  
-        1 = LZO with SSE Optimized Memory Copy  
-        2 = LZO with 32-bit Traversal & Unaligned Cache Reads  
+*Tabspace*filename is the full path to the file to be compressed  
+*Tabspace*compressionType is an integer in the range 0 to 5, with  
+*Tabspace**Tabspace* 0 = Baseline LZO 1x-1-15 compression  
+*Tabspace**Tabspace* 1 = LZO with SSE Optimized Memory Copy  
+*Tabspace**Tabspace* 2 = LZO with 32-bit Traversal & Unaligned Cache Reads  
         3 = LZO with Cache Aligned Read Optimization  
         4 = Multicore LZO compression  
         5 = LZO with Multicore/SSE Memory Copy/Cache Aligned Reads  
