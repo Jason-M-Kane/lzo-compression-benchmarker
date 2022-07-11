@@ -18,6 +18,7 @@ Where:
 &nbsp;&nbsp;&nbsp;&nbsp;*numIterations* is the number of times to perform compression on the dataset  
 &nbsp;&nbsp;&nbsp;&nbsp;*blockSize* is an optional input parameter.  If specified, it defines the size of the          
 &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;blocks of data to be compressed.  Otherwise the block size defaults to 256kb.  
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;It is required for Multicore & Combo.  
 &nbsp;&nbsp;&nbsp;&nbsp;*NumThreads* is the number of compression threads to use (Multicore & Combo Only)  
 &nbsp;&nbsp;&nbsp;&nbsp;*NumOutputBuffers* is the number of output buffers to use (Multicore & Combo Only)  
 
